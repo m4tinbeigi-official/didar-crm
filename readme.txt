@@ -2,9 +2,9 @@
 Contributors: m4tinbeigi-official
 Tags: crm, sync, didar, woocommerce, users
 Requires at least: 6.0
-Tested up to: 6.6
+Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.2
+Stable tag: 2.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -19,8 +19,10 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 - Mapping فیلدها سفارشی.
 - عملیات دستی با AJAX.
 - لاگ پیشرفته و UI زیبا (تب‌ها، کارت‌ها).
+- گزینه opt-out برای کاربران خاص.
+- سینک دستی تک‌تک کاربران از لیست کاربران.
 
-برای جزئیات بیشتر، به [وبسایت پلاگین](https://example.com/didar-sync) مراجعه کنید.
+برای جزئیات بیشتر، به [وبسایت پلاگین](https://didar.me/didar-sync) مراجعه کنید.
 
 == Installation ==
 
@@ -41,13 +43,23 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 = ووکامرس لازم است؟ =
 خیر، اما اگر نصب باشد، مشتریان را سینک می‌کند.
 
+= چطور یک کاربر را از سینک خارج کنم؟ =
+در صفحه ویرایش کاربر، گزینه "عدم سینک با دیدار" را فعال کنید.
+
 == Screenshots ==
 
 1. صفحه تنظیمات با تب‌ها.
 2. تب سینک با دکمه‌های AJAX.
 3. صفحه لاگ‌ها.
+4. ستون سینک در لیست کاربران.
+5. گزینه opt-out در پروفایل کاربر.
 
 == Changelog ==
+
+= 2.3 =
+* اضافه کردن گزینه opt-out در پروفایل کاربر برای عدم سینک.
+* اضافه کردن ستون سینک در لیست کاربران با دکمه سینک دستی تک‌تک کاربران.
+* به‌روزرسانی Tested up to به 6.8.
 
 = 2.2 =
 * اضافه کردن UI حرفه‌ای با تب‌ها و AJAX.
@@ -60,8 +72,8 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 == Upgrade Notice ==
 
-= 2.2 =
-به‌روزرسانی برای UI بهتر؛ تنظیمات قبلی حفظ می‌شود.
+= 2.3 =
+به‌روزرسانی برای ویژگی‌های opt-out و سینک تک کاربر؛ تنظیمات قبلی حفظ می‌شود.
 
 == Other Notes ==
 

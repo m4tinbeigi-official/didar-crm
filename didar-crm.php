@@ -3,12 +3,12 @@
  * Plugin Name: Didar CRM Complete User Sync
  * Plugin URI: https://didar.me
  * Description: پلاگین کامل برای سینک دوطرفه کاربران وردپرس و ووکامرس با CRM دیدار. شامل تنظیمات پیشرفته، cron job، و مدیریت خطاها.
- * Version: 1.0
+ * Version: 2.2
  * Author: Rick Sanchez
  * Author URI: https://ricksanchez.ir
  * License: GPL v2 or later
- * Text Domain: didar-sync
- * Domain Path: /languages
+ * Text Domain: didar-crm
+ * Tested up to: 6.8
  */
 
 // جلوگیری از دسترسی مستقیم
@@ -58,6 +58,18 @@ class DidarCRM_Complete_Sync {
         
         // AJAX برای سینک دستی
         add_action('wp_ajax_didar_manual_sync', array($this, 'manual_sync_handler'));
+        add_action('wp_ajax_didar_sync_single_user', array($this, 'sync_single_user_handler'));
+
+        // هوک‌های لیست کاربران
+        add_filter('manage_users_columns', array($this, 'add_sync_column'));
+        add_action('manage_users_custom_column', array($this, 'render_sync_column'), 10, 3);
+        add_action('admin_footer-users.php', array($this, 'add_sync_scripts'));
+
+        // هوک‌های ویرایش کاربر
+        add_action('show_user_profile', array($this, 'add_sync_optout_field'));
+        add_action('edit_user_profile', array($this, 'add_sync_optout_field'));
+        add_action('personal_options_update', array($this, 'save_sync_optout'));
+        add_action('edit_user_profile_update', array($this, 'save_sync_optout'));
     }
 
     public function init() {
@@ -65,12 +77,12 @@ class DidarCRM_Complete_Sync {
         $this->api_key = isset($this->options['api_key']) ? sanitize_text_field($this->options['api_key']) : '';
         $this->field_mapping = apply_filters('didar_field_mapping', $this->field_mapping);
         
-        load_plugin_textdomain('didar-sync', false, dirname(plugin_basename(__FILE__)) . '/languages/');
+        load_plugin_textdomain('didar-crm', false, dirname(plugin_basename(__FILE__)) . '/languages/');
     }
 
     public function enqueue_admin_assets($hook) {
         $screen = get_current_screen();
-        if ($screen->id !== 'settings_page_didar-sync' && $screen->id !== 'didar-sync_page_didar-logs') {
+        if ($screen->id !== 'settings_page_didar-sync' && $screen->id !== 'didar-sync_page_didar-logs' && $screen->id !== 'users' && $screen->id !== 'profile' && $screen->id !== 'user-edit') {
             return;
         }
 
@@ -119,6 +131,19 @@ class DidarCRM_Complete_Sync {
             #didar-sync-wrap .loading { display: none; text-align: center; padding: 20px; }
             #didar-sync-wrap .loading.active { display: block; }
             #didar-sync-wrap .success-notice { background: #d4edda; color: #155724; padding: 10px; border-radius: 4px; margin: 10px 0; }
+            .didar-sync-button { 
+                padding: 5px 10px; 
+                border: 1px solid #0073aa; 
+                background: #0073aa; 
+                color: white; 
+                border-radius: 3px; 
+                cursor: pointer; 
+                font-size: 12px; 
+                text-decoration: none; 
+            }
+            .didar-sync-button:hover { background: #005a87; }
+            .didar-sync-button.disabled { background: #ccc; cursor: not-allowed; }
+            .didar-sync-status { font-size: 11px; color: #666; }
         ');
 
         // JS برای تب‌ها و AJAX
@@ -135,7 +160,7 @@ class DidarCRM_Complete_Sync {
                     $(tab).addClass("active");
                 });
 
-                // AJAX Sync
+                // AJAX Sync for main settings
                 $(".sync-btn").click(function(e) {
                     e.preventDefault();
                     var btn = $(this);
@@ -146,7 +171,7 @@ class DidarCRM_Complete_Sync {
                     if (!confirm("آیا مطمئن هستید؟ این عملیات ممکن است زمان‌بر باشد.") ) return;
                     
                     btn.prop("disabled", true).text("در حال انجام...");
-                    loading.addClass("active").html("<p>در حال سینک... لطفاً صبر کنید.</p><div class='spinner'></div>");
+                    loading.addClass("active").html("<p>در حال سینک... لطفاً صبر کنید.</p><div class=\'spinner\'></div>");
                     notice.removeClass("active");
                     
                     $.post(ajaxurl, {
@@ -168,6 +193,35 @@ class DidarCRM_Complete_Sync {
                     });
                 });
                 
+                // Single user sync
+                $(".didar-sync-button").click(function(e) {
+                    e.preventDefault();
+                    var btn = $(this);
+                    var userId = btn.data("user-id");
+                    var status = btn.next(".didar-sync-status");
+                    
+                    if (btn.hasClass("disabled")) return;
+                    
+                    btn.addClass("disabled").text("در حال سینک...");
+                    status.html("در حال سینک...");
+                    
+                    $.post(ajaxurl, {
+                        action: "didar_sync_single_user",
+                        nonce: didar_ajax.nonce,
+                        user_id: userId
+                    }).done(function(response) {
+                        if (response.success) {
+                            status.html("سینک شد: " + response.data.message).css("color", "green");
+                        } else {
+                            status.html("خطا: " + response.data).css("color", "red");
+                        }
+                        btn.removeClass("disabled").text("سینک");
+                    }).fail(function() {
+                        status.html("خطای ارتباطی").css("color", "red");
+                        btn.removeClass("disabled").text("سینک");
+                    });
+                });
+                
                 // ذخیره original text برای دکمه‌ها
                 $(".sync-btn").each(function() {
                     $(this).data("original-text", $(this).text());
@@ -177,8 +231,71 @@ class DidarCRM_Complete_Sync {
 
         wp_localize_script('jquery', 'didar_ajax', array(
             'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('didar_manual_sync')
+            'nonce' => wp_create_nonce('didar_sync_actions')
         ));
+    }
+
+    public function add_sync_column($columns) {
+        $columns['didar_sync'] = __('سینک دیدار', 'didar-crm');
+        return $columns;
+    }
+
+    public function render_sync_column($value, $column_name, $user_id) {
+        if ($column_name !== 'didar_sync') {
+            return $value;
+        }
+
+        $optout = get_user_meta($user_id, 'didar_optout', true);
+        if ($optout) {
+            return '<span class="didar-sync-status" style="color: orange;">غیرفعال (opt-out)</span>';
+        }
+
+        $didar_id = get_user_meta($user_id, 'didar_contact_id', true);
+        $status = $didar_id ? 'همگام: ID ' . $didar_id : 'نامحسوب';
+
+        echo '<button class="didar-sync-button" data-user-id="' . esc_attr($user_id) . '">سینک</button>';
+        echo '<br><span class="didar-sync-status">' . esc_html($status) . '</span>';
+    }
+
+    public function add_sync_scripts() {
+        ?>
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            // کد JS قبلاً در enqueue اضافه شده
+        });
+        </script>
+        <?php
+    }
+
+    public function add_sync_optout_field($user) {
+        if (!current_user_can('edit_user', $user->ID)) {
+            return;
+        }
+        $optout = get_user_meta($user->ID, 'didar_optout', true);
+        ?>
+        <h3><?php esc_html_e('تنظیمات سینک دیدار', 'didar-crm'); ?></h3>
+        <table class="form-table">
+            <tr>
+                <th><label for="didar_optout"><?php esc_html_e('عدم سینک با دیدار', 'didar-crm'); ?></label></th>
+                <td>
+                    <input type="checkbox" id="didar_optout" name="didar_optout" <?php checked($optout); ?> />
+                    <p class="description"><?php esc_html_e('این کاربر را از سینک خودکار و دستی با CRM دیدار خارج کند.', 'didar-crm'); ?></p>
+                </td>
+            </tr>
+        </table>
+        <?php
+    }
+
+    public function save_sync_optout($user_id) {
+        if (!current_user_can('edit_user', $user_id)) {
+            return;
+        }
+
+        if (isset($_POST['didar_optout'])) {
+            update_user_meta($user_id, 'didar_optout', true);
+        } else {
+            delete_user_meta($user_id, 'didar_optout');
+        }
     }
 
     public function activate() {
@@ -220,8 +337,8 @@ class DidarCRM_Complete_Sync {
 
     public function admin_menu() {
         add_options_page(
-            __('تنظیمات سینک دیدار', 'didar-sync'),
-            __('دیدار CRM', 'didar-sync'),
+            __('تنظیمات سینک دیدار', 'didar-crm'),
+            __('دیدار CRM', 'didar-crm'),
             'manage_options',
             'didar-sync',
             array($this, 'settings_page')
@@ -230,8 +347,8 @@ class DidarCRM_Complete_Sync {
         // زیرمنو برای لاگ‌ها
         add_submenu_page(
             'didar-sync',
-            __('لاگ‌ها', 'didar-sync'),
-            __('لاگ‌ها', 'didar-sync'),
+            __('لاگ‌ها', 'didar-crm'),
+            __('لاگ‌ها', 'didar-crm'),
             'manage_options',
             'didar-logs',
             array($this, 'logs_page')
@@ -267,18 +384,18 @@ class DidarCRM_Complete_Sync {
     public function settings_page() {
         // نمایش notice اگر sync شده (حالا از AJAX)
         if (isset($_GET['synced'])) {
-            $message = $_GET['synced'] === 'to_didar' ? __('سینک به دیدار با موفقیت انجام شد.', 'didar-sync') : __('سینک از دیدار با موفقیت انجام شد.', 'didar-sync');
+            $message = $_GET['synced'] === 'to_didar' ? __('سینک به دیدار با موفقیت انجام شد.', 'didar-crm') : __('سینک از دیدار با موفقیت انجام شد.', 'didar-crm');
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html($message) . '</p></div>';
         }
         ?>
         <div class="wrap" id="didar-sync-wrap">
-            <h1><?php esc_html_e('تنظیمات کامل سینک با CRM دیدار', 'didar-sync'); ?></h1>
+            <h1><?php esc_html_e('تنظیمات کامل سینک با CRM دیدار', 'didar-crm'); ?></h1>
             
             <div class="didar-card">
                 <div class="didar-tab-nav">
-                    <a href="#tab-general" class="active"><?php esc_html_e('عمومی', 'didar-sync'); ?></a>
-                    <a href="#tab-mapping"><?php esc_html_e('نقشه‌برداری فیلدها', 'didar-sync'); ?></a>
-                    <a href="#tab-sync"><?php esc_html_e('سینک', 'didar-sync'); ?></a>
+                    <a href="#tab-general" class="active"><?php esc_html_e('عمومی', 'didar-crm'); ?></a>
+                    <a href="#tab-mapping"><?php esc_html_e('نقشه‌برداری فیلدها', 'didar-crm'); ?></a>
+                    <a href="#tab-sync"><?php esc_html_e('سینک', 'didar-crm'); ?></a>
                 </div>
                 
                 <div id="tab-general" class="didar-tab-content active">
@@ -290,50 +407,50 @@ class DidarCRM_Complete_Sync {
                         ?>
                         <table class="form-table">
                             <tr>
-                                <th scope="row"><?php esc_html_e('API Key دیدار', 'didar-sync'); ?></th>
+                                <th scope="row"><?php esc_html_e('API Key دیدار', 'didar-crm'); ?></th>
                                 <td>
                                     <input type="text" name="<?php echo esc_attr(DIDAR_SYNC_OPTION_KEY); ?>[api_key]" value="<?php echo esc_attr($this->options['api_key']); ?>" class="regular-text" />
-                                    <p class="description"><?php esc_html_e('کلید API را از پنل دیدار دریافت کنید: تنظیمات > اتصال به سرورهای دیگر > API Key', 'didar-sync'); ?></p>
+                                    <p class="description"><?php esc_html_e('کلید API را از پنل دیدار دریافت کنید: تنظیمات > اتصال به سرورهای دیگر > API Key', 'didar-crm'); ?></p>
                                 </td>
                             </tr>
                             <tr>
-                                <th scope="row"><?php esc_html_e('جهت سینک', 'didar-sync'); ?></th>
+                                <th scope="row"><?php esc_html_e('جهت سینک', 'didar-crm'); ?></th>
                                 <td>
                                     <select name="<?php echo esc_attr(DIDAR_SYNC_OPTION_KEY); ?>[sync_direction]">
-                                        <option value="both" <?php selected($this->options['sync_direction'], 'both'); ?>><?php esc_html_e('دوطرفه', 'didar-sync'); ?></option>
-                                        <option value="one_to_didar" <?php selected($this->options['sync_direction'], 'one_to_didar'); ?>><?php esc_html_e('از WP به دیدار', 'didar-sync'); ?></option>
-                                        <option value="one_from_didar" <?php selected($this->options['sync_direction'], 'one_from_didar'); ?>><?php esc_html_e('از دیدار به WP', 'didar-sync'); ?></option>
+                                        <option value="both" <?php selected($this->options['sync_direction'], 'both'); ?>><?php esc_html_e('دوطرفه', 'didar-crm'); ?></option>
+                                        <option value="one_to_didar" <?php selected($this->options['sync_direction'], 'one_to_didar'); ?>><?php esc_html_e('از WP به دیدار', 'didar-crm'); ?></option>
+                                        <option value="one_from_didar" <?php selected($this->options['sync_direction'], 'one_from_didar'); ?>><?php esc_html_e('از دیدار به WP', 'didar-crm'); ?></option>
                                     </select>
                                 </td>
                             </tr>
                             <tr>
-                                <th scope="row"><?php esc_html_e('فرکانس Cron', 'didar-sync'); ?></th>
+                                <th scope="row"><?php esc_html_e('فرکانس Cron', 'didar-crm'); ?></th>
                                 <td>
                                     <select name="<?php echo esc_attr(DIDAR_SYNC_OPTION_KEY); ?>[cron_frequency]">
-                                        <option value="hourly" <?php selected($this->options['cron_frequency'], 'hourly'); ?>><?php esc_html_e('ساعتی', 'didar-sync'); ?></option>
-                                        <option value="twicedaily" <?php selected($this->options['cron_frequency'], 'twicedaily'); ?>><?php esc_html_e('دو بار در روز', 'didar-sync'); ?></option>
-                                        <option value="daily" <?php selected($this->options['cron_frequency'], 'daily'); ?>><?php esc_html_e('روزانه', 'didar-sync'); ?></option>
+                                        <option value="hourly" <?php selected($this->options['cron_frequency'], 'hourly'); ?>><?php esc_html_e('ساعتی', 'didar-crm'); ?></option>
+                                        <option value="twicedaily" <?php selected($this->options['cron_frequency'], 'twicedaily'); ?>><?php esc_html_e('دو بار در روز', 'didar-crm'); ?></option>
+                                        <option value="daily" <?php selected($this->options['cron_frequency'], 'daily'); ?>><?php esc_html_e('روزانه', 'didar-crm'); ?></option>
                                     </select>
-                                    <p class="description"><?php esc_html_e('برای سینک از دیدار به وردپرس', 'didar-sync'); ?></p>
+                                    <p class="description"><?php esc_html_e('برای سینک از دیدار به وردپرس', 'didar-crm'); ?></p>
                                 </td>
                             </tr>
                             <tr>
-                                <th scope="row"><?php esc_html_e('فعال‌سازی لاگ', 'didar-sync'); ?></th>
+                                <th scope="row"><?php esc_html_e('فعال‌سازی لاگ', 'didar-crm'); ?></th>
                                 <td>
                                     <input type="checkbox" id="log_enabled" name="<?php echo esc_attr(DIDAR_SYNC_OPTION_KEY); ?>[log_enabled]" <?php checked($this->options['log_enabled']); ?> />
-                                    <label for="log_enabled"><?php esc_html_e('لاگ عملیات را در فایل ذخیره کند', 'didar-sync'); ?></label>
-                                    <p class="description"><?php esc_html_e('فایل لاگ در wp-content/didar-sync.log', 'didar-sync'); ?></p>
+                                    <label for="log_enabled"><?php esc_html_e('لاگ عملیات را در فایل ذخیره کند', 'didar-crm'); ?></label>
+                                    <p class="description"><?php esc_html_e('فایل لاگ در wp-content/didar-sync.log', 'didar-crm'); ?></p>
                                 </td>
                             </tr>
                             <tr>
-                                <th scope="row"><?php esc_html_e('سینک خودکار ووکامرس', 'didar-sync'); ?></th>
+                                <th scope="row"><?php esc_html_e('سینک خودکار ووکامرس', 'didar-crm'); ?></th>
                                 <td>
                                     <input type="checkbox" id="auto_sync_woocommerce" name="<?php echo esc_attr(DIDAR_SYNC_OPTION_KEY); ?>[auto_sync_woocommerce]" <?php checked($this->options['auto_sync_woocommerce']); ?> />
-                                    <label for="auto_sync_woocommerce"><?php esc_html_e('مشتریان ووکامرس را نیز سینک کند', 'didar-sync'); ?></label>
+                                    <label for="auto_sync_woocommerce"><?php esc_html_e('مشتریان ووکامرس را نیز سینک کند', 'didar-crm'); ?></label>
                                     <?php if (class_exists('WooCommerce')): ?>
-                                        <p class="description"><?php esc_html_e('ووکامرس فعال است و هوک‌ها اضافه شده‌اند.', 'didar-sync'); ?></p>
+                                        <p class="description"><?php esc_html_e('ووکامرس فعال است و هوک‌ها اضافه شده‌اند.', 'didar-crm'); ?></p>
                                     <?php else: ?>
-                                        <p class="description"><?php esc_html_e('ووکامرس نصب نیست؛ این گزینه نادیده گرفته می‌شود.', 'didar-sync'); ?></p>
+                                        <p class="description"><?php esc_html_e('ووکامرس نصب نیست؛ این گزینه نادیده گرفته می‌شود.', 'didar-crm'); ?></p>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -346,8 +463,8 @@ class DidarCRM_Complete_Sync {
                     <table class="mapping-table">
                         <thead>
                             <tr>
-                                <th><?php esc_html_e('فیلد WP/ووکامرس', 'didar-sync'); ?></th>
-                                <th><?php esc_html_e('فیلد دیدار', 'didar-sync'); ?></th>
+                                <th><?php esc_html_e('فیلد WP/ووکامرس', 'didar-crm'); ?></th>
+                                <th><?php esc_html_e('فیلد دیدار', 'didar-crm'); ?></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -359,24 +476,25 @@ class DidarCRM_Complete_Sync {
                             <?php endforeach; ?>
                         </tbody>
                     </table>
-                    <p class="description"><?php esc_html_e('فیلدهای سفارشی را بر اساس داکیومنت API تنظیم کنید. پس از تغییر، تنظیمات را ذخیره کنید.', 'didar-sync'); ?></p>
+                    <p class="description"><?php esc_html_e('فیلدهای سفارشی را بر اساس داکیومنت API تنظیم کنید. پس از تغییر، تنظیمات را ذخیره کنید.', 'didar-crm'); ?></p>
                 </div>
                 
                 <div id="tab-sync" class="didar-tab-content">
-                    <h3><?php esc_html_e('عملیات دستی سینک', 'didar-sync'); ?></h3>
+                    <h3><?php esc_html_e('عملیات دستی سینک', 'didar-crm'); ?></h3>
                     <div class="sync-buttons">
-                        <button class="sync-btn sync-btn-primary" data-direction="to_didar"><?php esc_html_e('سینک به دیدار (همه کاربران)', 'didar-sync'); ?></button>
-                        <button class="sync-btn sync-btn-secondary" data-direction="from_didar"><?php esc_html_e('سینک از دیدار (همه مخاطبین)', 'didar-sync'); ?></button>
+                        <button class="sync-btn sync-btn-primary" data-direction="to_didar"><?php esc_html_e('سینک به دیدار (همه کاربران)', 'didar-crm'); ?></button>
+                        <button class="sync-btn sync-btn-secondary" data-direction="from_didar"><?php esc_html_e('سینک از دیدار (همه مخاطبین)', 'didar-crm'); ?></button>
                     </div>
                     <div class="loading"></div>
                     <div class="success-notice"></div>
-                    <p class="description"><?php esc_html_e('این عملیات‌ها از طریق AJAX بدون reload صفحه انجام می‌شوند.', 'didar-sync'); ?></p>
+                    <p class="description"><?php esc_html_e('این عملیات‌ها از طریق AJAX بدون reload صفحه انجام می‌شوند.', 'didar-crm'); ?></p>
+                    <p class="description"><?php esc_html_e('برای سینک تک‌تک کاربران، به لیست کاربران مراجعه کنید.', 'didar-crm'); ?></p>
                 </div>
             </div>
             
             <div class="didar-card">
-                <h2><?php esc_html_e('راهنما', 'didar-sync'); ?></h2>
-                <p><?php esc_html_e('این پلاگین کاربران را به صورت خودکار سینک می‌کند. پنل مدیریت با تب‌ها و AJAX برای تجربه کاربری بهتر طراحی شده. برای production، WP-Cron را با server cron جایگزین کنید.', 'didar-sync'); ?></p>
+                <h2><?php esc_html_e('راهنما', 'didar-crm'); ?></h2>
+                <p><?php esc_html_e('این پلاگین کاربران را به صورت خودکار سینک می‌کند. پنل مدیریت با تب‌ها و AJAX برای تجربه کاربری بهتر طراحی شده. برای production، WP-Cron را با server cron جایگزین کنید.', 'didar-crm'); ?></p>
             </div>
         </div>
         <?php
@@ -384,26 +502,26 @@ class DidarCRM_Complete_Sync {
 
     public function logs_page() {
         if (!current_user_can('manage_options')) {
-            wp_die(__('شما مجوز لازم را ندارید.', 'didar-sync'));
+            wp_die(__('شما مجوز لازم را ندارید.', 'didar-crm'));
         }
 
         if (isset($_GET['clear_logs']) && wp_verify_nonce($_GET['_wpnonce'], 'clear_didar_logs')) {
             file_put_contents(DIDAR_SYNC_LOG_FILE, '');
-            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('لاگ‌ها پاک شد.', 'didar-sync') . '</p></div>';
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('لاگ‌ها پاک شد.', 'didar-crm') . '</p></div>';
         }
 
         if (file_exists(DIDAR_SYNC_LOG_FILE)) {
             $logs = esc_textarea(file_get_contents(DIDAR_SYNC_LOG_FILE));
         } else {
-            $logs = esc_html__('فایل لاگ وجود ندارد.', 'didar-sync');
+            $logs = esc_html__('فایل لاگ وجود ندارد.', 'didar-crm');
         }
         ?>
         <div class="wrap" id="didar-sync-wrap">
-            <h1><?php esc_html_e('لاگ‌های سینک دیدار', 'didar-sync'); ?></h1>
+            <h1><?php esc_html_e('لاگ‌های سینک دیدار', 'didar-crm'); ?></h1>
             <div class="didar-card">
                 <textarea style="width:100%; height:400px; font-family: monospace;" readonly><?php echo $logs; ?></textarea>
                 <p>
-                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?page=didar-logs&clear_logs=1'), 'clear_didar_logs')); ?>" class="button button-secondary" onclick="return confirm('<?php esc_js(__('مطمئن هستید؟ لاگ‌ها پاک خواهند شد.', 'didar-sync')); ?>');"><?php esc_html_e('پاک کردن لاگ‌ها', 'didar-sync'); ?></a>
+                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?page=didar-logs&clear_logs=1'), 'clear_didar_logs')); ?>" class="button button-secondary" onclick="return confirm('<?php esc_js(__('مطمئن هستید؟ لاگ‌ها پاک خواهند شد.', 'didar-crm')); ?>');"><?php esc_html_e('پاک کردن لاگ‌ها', 'didar-crm'); ?></a>
                 </p>
             </div>
         </div>
@@ -422,8 +540,15 @@ class DidarCRM_Complete_Sync {
         file_put_contents(DIDAR_SYNC_LOG_FILE, $log_entry, FILE_APPEND | LOCK_EX);
     }
 
+    private function is_user_optout($user_id) {
+        return get_user_meta($user_id, 'didar_optout', true);
+    }
+
     public function sync_to_didar($user_id, $customer_id = null) {
-        if (empty($this->api_key) || $this->options['sync_direction'] === 'one_from_didar') {
+        if (empty($this->api_key) || $this->options['sync_direction'] === 'one_from_didar' || $this->is_user_optout($user_id)) {
+            if ($this->is_user_optout($user_id)) {
+                $this->log_message('کاربر opt-out است: ID ' . intval($user_id));
+            }
             return;
         }
 
@@ -551,14 +676,14 @@ class DidarCRM_Complete_Sync {
                 $user = get_user_by('email', $email);
 
                 if (!$user) {
-                    // ایجاد کاربر جدید با username unique
+                    // ایجاد کاربر جدید
                     $base_username = sanitize_user(($contact['FirstName'] ?? '') . '.' . ($contact['LastName'] ?? ''));
                     $username = $base_username;
                     $counter = 1;
                     while (username_exists($username)) {
                         $username = $base_username . $counter;
                         $counter++;
-                        if ($counter > 100) { // جلوگیری از loop
+                        if ($counter > 100) {
                             $this->log_message('نمی‌توان username unique ساخت برای ایمیل: ' . $email);
                             continue 2;
                         }
@@ -587,7 +712,12 @@ class DidarCRM_Complete_Sync {
                     wp_new_user_notification($user_id, null, 'both');
                     $this->log_message('کاربر جدید ایجاد شد از دیدار: ID ' . $user_id . ' (ایمیل: ' . $email . ')');
                 } else {
-                    // به‌روزرسانی کاربر موجود
+                    // به‌روزرسانی کاربر موجود - چک optout
+                    if ($this->is_user_optout($user->ID)) {
+                        $this->log_message('کاربر opt-out است؛ skip update از دیدار برای ID ' . $user->ID . ' (ایمیل: ' . $email . ')');
+                        continue;
+                    }
+
                     $current_didar_id = get_user_meta($user->ID, 'didar_contact_id', true);
                     if ($current_didar_id && $current_didar_id != $didar_id) {
                         $this->log_message('ID دیدار متفاوت؛ skip update برای کاربر ' . $user->ID . ' (ایمیل: ' . $email . ')');
@@ -622,20 +752,41 @@ class DidarCRM_Complete_Sync {
         $direction = sanitize_text_field($_POST['direction'] ?? '');
         if ($direction === 'to_didar') {
             $this->manual_sync_to_didar();
-            wp_send_json_success(array('message' => __('تعداد کاربران سینک‌شده: ' . $this->get_user_count(), 'didar-sync')));
+            wp_send_json_success(array('message' => __('تعداد کاربران سینک‌شده: ' . $this->get_user_count(), 'didar-crm')));
         } elseif ($direction === 'from_didar') {
             $this->manual_sync_from_didar();
-            wp_send_json_success(array('message' => __('سینک از دیدار کامل شد.', 'didar-sync')));
+            wp_send_json_success(array('message' => __('سینک از دیدار کامل شد.', 'didar-crm')));
         }
         wp_send_json_error('Invalid direction');
+    }
+
+    public function sync_single_user_handler() {
+        if (!current_user_can('manage_options') || !wp_verify_nonce($_POST['nonce'] ?? '', 'didar_sync_actions')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $user_id = intval($_POST['user_id'] ?? 0);
+        if (!$user_id) {
+            wp_send_json_error('Invalid user ID');
+        }
+
+        if ($this->is_user_optout($user_id)) {
+            wp_send_json_error('کاربر opt-out است');
+        }
+
+        $this->sync_to_didar($user_id);
+        $didar_id = get_user_meta($user_id, 'didar_contact_id', true);
+        wp_send_json_success(array('message' => 'ID دیدار: ' . $didar_id));
     }
 
     private function manual_sync_to_didar() {
         $users = get_users(array('number' => 0)); // همه کاربران
         $count = 0;
         foreach ($users as $user) {
-            $this->sync_to_didar($user->ID);
-            $count++;
+            if (!$this->is_user_optout($user->ID)) {
+                $this->sync_to_didar($user->ID);
+                $count++;
+            }
         }
         $this->log_message('سینک دستی به دیدار: ' . $count . ' کاربر پردازش شد');
     }
@@ -645,7 +796,8 @@ class DidarCRM_Complete_Sync {
     }
 
     private function get_user_count() {
-        return count_user_posts(0, 'any'); // تقریبی تعداد کاربران
+        global $wpdb;
+        return intval($wpdb->get_var("SELECT COUNT(ID) FROM $wpdb->users"));
     }
 }
 
